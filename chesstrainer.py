@@ -1,3 +1,6 @@
+import chess
+import chess.engine
+from chess.engine import Cp, Mate, MateGiven
 import tkinter as tk
 from tkinter import messagebox, PhotoImage, Label, Button, Frame
 import requests
@@ -5,7 +8,9 @@ import json
 import random
 
 LICHESS_API_URL = "https://explorer.lichess.ovh/lichess"
-STOCKFISH_API_URL = "https://stockfish.online/api/s/v2.php"
+
+ENGINE_PATH = r"C:\Users\bsche\source\repos\chess trainer\stockfish\stockfish-windows-x86-64-sse41-popcnt.exe" #CHANGE TO YOUR ENGINE PATH
+
 
 
 
@@ -13,27 +18,23 @@ class ChessTrainer:
     def __init__(self, master):
         self.master = master
         self.master.title("Chess Trainer")
-        self.master.configure(bg="#2c2c2c")  # Dark background
+        self.master.configure(bg="#2c2c2c")  
 
-        # Layout Frames
         self.left_frame = Frame(master, bg="#2c2c2c")
         self.left_frame.grid(row=0, column=0, padx=10, pady=10)
 
         self.right_frame = Frame(master, bg="#3b3b3b")
         self.right_frame.grid(row=0, column=1, padx=10, pady=10, sticky="ns")
 
-        # Board Setup
         self.board = chess.Board()
         self.canvas_size = 400
         self.square_size = self.canvas_size // 8
         self.canvas = tk.Canvas(self.left_frame, width=self.canvas_size, height=self.canvas_size, bg="white")
         self.canvas.pack()
 
-        # Load images
         self.piece_images = self.load_piece_images()
         self.eval_images = self.load_eval_images()
 
-        # Right Panel Widgets
         self.info_label = Label(self.right_frame, text="Set up the board and press 'Start Training'",
                                 bg="#3b3b3b", fg="white", font=("Helvetica", 12))
         self.info_label.pack(pady=10)
@@ -42,7 +43,10 @@ class ChessTrainer:
                                 bg="#3b3b3b", fg="white", font=("Helvetica", 12))
         self.eval_label.pack(pady=10)
 
-        # Initial Image for Move Quality
+        self.best_move_label = Label(self.right_frame, text="Previous best move: N/A",
+                                bg="#3b3b3b", fg="white", font=("Helvetica", 12))
+        self.best_move_label.pack(pady=10)
+
         self.eval_image_size = self.canvas_size // 3
         self.eval_image_label = Label(self.right_frame, bg="#3b3b3b")
         self.eval_image_label.pack(pady=10)
@@ -60,9 +64,9 @@ class ChessTrainer:
         self.training = False
         self.previous_eval = 0
         self.selected_piece = None
+        self.user_color = chess.WHITE
         self.draw_board()
 
-        # Canvas events
         self.canvas.bind("<Button-1>", self.on_click)
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
@@ -72,18 +76,18 @@ class ChessTrainer:
         names = ["p", "r", "n", "b", "q", "k"]
         for color, prefix in [(chess.WHITE, "l"), (chess.BLACK, "d")]:
             for piece in names:
-                filename = f"Chess_{piece}{prefix}t60.png"
+                filename = f"images/Chess_{piece}{prefix}t60.png"
                 pieces[piece + ("w" if color else "b")] = PhotoImage(file=filename)
         return pieces
 
     def load_eval_images(self):
         evals = {
-            "Great move!": PhotoImage(file="great_move.png"),
-            "Good move.": PhotoImage(file="good_move.png"),
-            "Fine, but could be better.": PhotoImage(file="fine_move.png"),
-            "Inaccurate move.": PhotoImage(file="innacurate_move.png"),
-            "Mistake.": PhotoImage(file="mistake_move.png"),
-            "Blunder!": PhotoImage(file="blunder_move.png")
+            "Best move!": PhotoImage(file="images/great_move.png"),
+            "Good move.": PhotoImage(file="images/good_move.png"),
+            "Okay": PhotoImage(file="images/fine_move.png"),
+            "Inaccurate move.": PhotoImage(file="images/innacurate_move.png"),
+            "Mistake.": PhotoImage(file="images/mistake_move.png"),
+            "Blunder!": PhotoImage(file="images/blunder_move.png")
         }
         return evals
 
@@ -110,19 +114,34 @@ class ChessTrainer:
                     (7 - y) * self.square_size + self.square_size // 2, image=piece_image, tags=("piece", square)
                 )
 
-    def fetch_stockfish_eval(self, fen, depth=15):
-        params = {"fen": fen, "depth": depth}
-        response = requests.get(STOCKFISH_API_URL, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success"):
-                evaluation = data.get("evaluation")
-                if evaluation is not None:
-                    return evaluation
-                elif data.get("mate") is not None:
-                    return 1000 if data.get("mate") > 0 else -1000
-        return 0  # Default to 0 if evaluation is unavailable
-
+    def fetch_stockfish_eval(self, fen, depth=20):
+        with chess.engine.SimpleEngine.popen_uci(ENGINE_PATH) as engine:
+            board = chess.Board(fen)
+            info = engine.analyse(board, chess.engine.Limit(depth=depth))
+            score = info["score"].relative
+            
+            if score.is_mate(): 
+                return 999
+            if self.board.turn == chess.BLACK:
+                return -score.score() / 100
+            else:
+                return score.score() / 100
+            
+    def get_best_move(self, fen, depth=20, move_format="text"):
+        with chess.engine.SimpleEngine.popen_uci(ENGINE_PATH) as engine:
+            board = chess.Board(fen)
+            
+            result = engine.play(board, chess.engine.Limit(depth=depth))
+            
+            move = result.move
+            
+            if move_format == "uci":
+                return move.uci()  
+            elif move_format == "text":
+                return board.san(move)  
+            else:
+                raise ValueError("Invalid move_format. Use 'uci' or 'text'.")
+            
     def fetch_lichess_move(self, fen):
         params = {"fen": fen}
         response = requests.get(LICHESS_API_URL, params=params)
@@ -138,15 +157,15 @@ class ChessTrainer:
         if current_eval is None or self.previous_eval is None:
             return "Evaluation unavailable"
         centipawn_loss = abs(self.previous_eval - current_eval) * 100
-        if centipawn_loss < 20:
-            return "Great move!"
+        if self.is_best:
+            return "Best move!"
         elif centipawn_loss < 50:
             return "Good move."
         elif centipawn_loss < 100:
-            return "Fine, but could be better."
+            return "Okay"
         elif centipawn_loss < 200:
             return "Inaccurate move."
-        elif centipawn_loss < 400:
+        elif centipawn_loss < 300:
             return "Mistake."
         else:
             return "Blunder!"
@@ -154,10 +173,10 @@ class ChessTrainer:
     def undo_move(self):
         if self.board.move_stack:
             self.board.pop()
+            self.board.pop()
             self.previous_eval = 0
             self.info_label.config(text="Move undone. Make your next move.")
             self.eval_label.config(text="Current Evaluation: N/A")
-            self.eval_image_label.config(image=self.eval_images["Good move."])
             self.draw_board()
 
     def on_click(self, event):
@@ -181,26 +200,37 @@ class ChessTrainer:
             end_square = chess.square(end_col, 7 - end_row)
             move = chess.Move(start_square, end_square)
 
+            self.is_best = False
+            if (move.uci() == self.get_best_move(self.board.fen(), move_format="uci")):
+                self.is_best = True
+
             if move in self.board.legal_moves:
-                self.previous_eval = self.fetch_stockfish_eval(self.board.fen())  # Update previous eval
+                previous_best = self.get_best_move(self.board.fen(), move_format="text")
+                self.best_move_label.config(text=f"Previous Best: {previous_best}")
+                
                 self.board.push(move)
                 self.draw_board()
 
                 current_eval = self.fetch_stockfish_eval(self.board.fen())
                 move_quality = self.evaluate_move_quality(current_eval)
-                self.info_label.config(text=move_quality)
-                self.eval_label.config(text=f"Current Evaluation: {current_eval:.2f}")
-                self.eval_image_label.config(image=self.eval_images.get(move_quality, ""))
-                resized_image = self.resize_image(self.eval_images.get(move_quality), self.eval_image_size)
-                self.eval_image_label.config(image=resized_image)
-                self.eval_image_label.image = resized_image
-                self.previous_eval = current_eval
+
+                if self.training: 
+                    self.info_label.config(text=move_quality)
+                    self.eval_label.config(text=f"Current Evaluation: {current_eval:.2f}")
+                    self.eval_image_label.config(image=self.eval_images.get(move_quality, ""))
+                    resized_image = self.resize_image(self.eval_images.get(move_quality), self.eval_image_size)
+                    self.eval_image_label.config(image=resized_image)
+                    self.eval_image_label.image = resized_image
+
+                    
 
                 if self.training:
                     lichess_move = self.fetch_lichess_move(self.board.fen())
                     if lichess_move:
                         self.board.push_uci(lichess_move)
                         self.info_label.config(text=f"Computer played: {lichess_move}")
+                        self.previous_eval = self.fetch_stockfish_eval(self.board.fen())
+                        self.eval_label.config(text=f"Current Evaluation: {self.previous_eval:.2f}")
                     else:
                         self.info_label.config(text="No move data available from Lichess.")
             else:
