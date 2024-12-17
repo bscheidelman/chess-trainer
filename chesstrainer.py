@@ -1,7 +1,3 @@
-import asyncio
-import chess
-import chess.engine
-from chess.engine import Cp, Mate, MateGiven
 import tkinter as tk
 from tkinter import messagebox, PhotoImage, Label, Button, Frame
 import requests
