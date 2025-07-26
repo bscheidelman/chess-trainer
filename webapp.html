@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chess Trainer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+    <!-- No engine script needed - we are using an API! -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+        .board {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            grid-template-rows: repeat(8, 1fr);
+            width: 100%;
+            max-width: 600px;
+            aspect-ratio: 1 / 1;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+        .square {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: clamp(20px, 6vw, 48px);
+            position: relative;
+        }
+        .light { background-color: #f0d9b5; }
+        .dark { background-color: #b58863; }
+        .piece {
+            cursor: grab;
+            user-select: none;
+            width: 80%;
+            height: 80%;
+            text-align: center;
+            line-height: 1;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: opacity 0.1s ease-in-out;
+        }
+        .piece.dragging {
+            opacity: 0;
+        }
+        .highlight-legal {
+            background-color: rgba(34, 197, 94, 0.2);
+            box-shadow: inset 0 0 0 3px rgba(34, 197, 94, 0.5);
+        }
+        .highlight-selected {
+            background-color: rgba(96, 165, 250, 0.3) !important;
+            box-shadow: inset 0 0 0 3px rgba(96, 165, 250, 0.7);
+        }
+        .highlight-check {
+             background: radial-gradient(circle, rgba(239, 68, 68, 0.4) 20%, transparent 25%);
+        }
+        .fade-in {
+            animation: fadeIn 0.5s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="text-gray-800 flex items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+        <!-- Chessboard Column -->
+        <div class="lg:col-span-2 flex flex-col items-center justify-center">
+            <div id="board" class="board"></div>
+            <div id="turn-indicator" class="mt-4 text-lg font-semibold text-gray-600">Press Start Training</div>
+        </div>
+
+        <!-- Control Panel Column -->
+        <div class="bg-white p-6 rounded-2xl shadow-lg flex flex-col space-y-6">
+            <div class="text-center">
+                <h1 class="text-3xl font-bold text-gray-900">Chess Trainer</h1>
+                <p class="text-gray-500">Improve your game, one move at a time.</p>
+            </div>
+            
+            <div id="feedback-card" class="bg-gray-50 p-5 rounded-xl text-center transition-all duration-300">
+                <div id="eval-image" class="text-5xl mb-2 text-gray-400"><i class="fas fa-chess"></i></div>
+                <div id="move-quality" class="text-xl font-semibold text-gray-700">Ready to begin</div>
+                <div id="eval-score" class="text-gray-500 mt-1">Evaluation: N/A</div>
+            </div>
+
+            <div class="bg-gray-50 p-5 rounded-xl">
+                <h2 class="text-lg font-semibold mb-2 text-gray-800">Analysis</h2>
+                <p id="best-move-label" class="text-gray-600">Previous Best: N/A</p>
+                <p id="engine-status" class="text-sm text-gray-400 mt-2">Engine: Ready (API)</p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4 pt-2">
+                <button id="start-button" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center shadow-md hover:shadow-lg"><i class="fas fa-play mr-2"></i> Start</button>
+                <button id="undo-button" class="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-3 px-4 rounded-lg transition duration-300 flex items-center justify-center" disabled><i class="fas fa-undo mr-2"></i> Undo</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- DOM Elements ---
+            const boardElement = document.getElementById('board');
+            const startButton = document.getElementById('start-button');
+            const undoButton = document.getElementById('undo-button');
+            const moveQualityElement = document.getElementById('move-quality');
+            const evalScoreElement = document.getElementById('eval-score');
+            const bestMoveLabelElement = document.getElementById('best-move-label');
+            const turnIndicatorElement = document.getElementById('turn-indicator');
+            const engineStatusElement = document.getElementById('engine-status');
+            const evalImageElement = document.getElementById('eval-image');
+            const feedbackCard = document.getElementById('feedback-card');
+
+            // --- Game State ---
+            let game = new Chess();
+            let trainingStarted = false;
+            let selectedSquare = null;
+            let moveHistoryForUndo = [];
+
+            // --- Piece Representation ---
+            const pieceUnicode = {
+                w: { p: '♙', r: '♖', n: '♘', b: '♗', q: '♕', k: '♔' },
+                b: { p: '♟', r: '♜', n: '♞', b: '♝', q: '♛', k: '♚' }
+            };
+
+            // --- Board Drawing ---
+            function drawBoard() {
+                boardElement.innerHTML = '';
+                const squares = game.board();
+                const inCheck = game.in_check();
+
+                for (let i = 0; i < 8; i++) {
+                    for (let j = 0; j < 8; j++) {
+                        const squareEl = document.createElement('div');
+                        const squareName = String.fromCharCode('a'.charCodeAt(0) + j) + (8 - i);
+                        squareEl.dataset.square = squareName;
+                        squareEl.classList.add('square', (i + j) % 2 === 0 ? 'light' : 'dark');
+
+                        const piece = squares[i][j];
+                        if (piece) {
+                            const pieceEl = document.createElement('div');
+                            pieceEl.classList.add('piece');
+                            pieceEl.textContent = pieceUnicode[piece.color][piece.type];
+                            pieceEl.draggable = trainingStarted && game.turn() === piece.color;
+                            squareEl.appendChild(pieceEl);
+                        }
+                        
+                        if (inCheck && piece && piece.type === 'k' && piece.color === game.turn()) {
+                            squareEl.classList.add('highlight-check');
+                        }
+                        boardElement.appendChild(squareEl);
+                    }
+                }
+                updateTurnIndicator();
+                addInteractionHandlers();
+            }
+
+            function updateTurnIndicator() {
+                if (!trainingStarted) {
+                    turnIndicatorElement.textContent = 'Press Start Training';
+                    return;
+                }
+                const turn = game.turn() === 'w' ? 'Your Turn' : "Computer's Turn";
+                turnIndicatorElement.textContent = turn;
+                if (game.turn() === 'b') {
+                    turnIndicatorElement.innerHTML += ' <i class="fas fa-spinner fa-spin ml-2"></i>';
+                }
+            }
+            
+            // --- API-Based Engine Interaction ---
+            async function getEngineEvaluation(fen, depth = 12) {
+                engineStatusElement.textContent = 'Engine: Analyzing...';
+                
+                // *** BUG FIX: Sanitize the FEN for the buggy chess-api.com parser ***
+                // The API fails if the en passant field is anything other than "-".
+                // We will replace it to ensure compatibility.
+                let fenParts = fen.split(" ");
+                if (fenParts[3] !== "-") {
+                    console.log(`Original FEN has en passant square "${fenParts[3]}". Sanitizing for API.`);
+                    fenParts[3] = "-";
+                }
+                const sanitizedFen = fenParts.join(" ");
+                
+                console.log("Sending FEN to chess-api.com:", sanitizedFen);
+
+                try {
+                    const response = await fetch("https://chess-api.com/v1", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ fen: sanitizedFen, depth: depth }),
+                    });
+                    
+                    const data = await response.json();
+                    console.log("Received response from chess-api.com:", data);
+                    
+                    if (data && data.move) {
+                        engineStatusElement.textContent = 'Engine: Idle';
+                        let evaluation = data.eval;
+                        if (data.mate !== null) {
+                            evaluation = data.mate > 0 ? 999 : -999;
+                        }
+                        return { move: data.move, score: evaluation };
+                    } 
+                    else if (data && data.error) {
+                        throw new Error(`API Error: ${data.error} - ${data.text}`);
+                    }
+                    else {
+                        throw new Error('Invalid API response structure.');
+                    }
+
+                } catch (error) {
+                    console.error("Chess-API error:", error);
+                    engineStatusElement.textContent = 'Engine: API Error';
+                    return { move: null, score: 0 };
+                }
+            }
+
+            // --- Lichess API Interaction ---
+            async function fetchLichessMove(fen) {
+                const url = `https://explorer.lichess.ovh/lichess?variant=standard&fen=${encodeURIComponent(fen)}`;
+                try {
+                    const response = await fetch(url);
+                    if (!response.ok) return null;
+                    const data = await response.json();
+                    const moves = data.moves;
+
+                    if (!moves || moves.length === 0) return null;
+
+                    const totalPlays = moves.reduce((sum, move) => sum + move.white + move.black + move.draws, 0);
+                    if (totalPlays === 0) return moves[0].uci;
+                    const randomPick = Math.random() * totalPlays;
+                    
+                    let cumulative = 0;
+                    for (const move of moves) {
+                        cumulative += move.white + move.black + move.draws;
+                        if (randomPick <= cumulative) {
+                            return move.uci;
+                        }
+                    }
+                    return null;
+                } catch (error) {
+                    console.error("Lichess API error:", error);
+                    return null;
+                }
+            }
+
+            // --- Move Logic ---
+            async function handleUserMove(move) {
+                if (!trainingStarted || game.turn() !== 'w') return;
+                
+                const fenBeforeMove = game.fen();
+                const bestMoveAnalysis = await getEngineEvaluation(fenBeforeMove);
+                const previousEval = bestMoveAnalysis.score;
+                
+                const tempGame = new Chess(fenBeforeMove);
+                const bestMoveSAN = bestMoveAnalysis.move ? tempGame.move(bestMoveAnalysis.move, {sloppy:true})?.san : 'N/A';
+
+                bestMoveLabelElement.textContent = `Previous Best: ${bestMoveSAN}`;
+
+                const moveResult = game.move(move);
+                if (moveResult === null) {
+                    clearHighlights();
+                    return;
+                }
+                
+                moveHistoryForUndo.push(fenBeforeMove);
+                undoButton.disabled = false;
+                drawBoard();
+                
+                const fenAfterMove = game.fen();
+                const currentEvalAnalysis = await getEngineEvaluation(fenAfterMove);
+                const currentEval = currentEvalAnalysis.score;
+                
+                const uciMove = moveResult.from + moveResult.to;
+                evaluateMoveQuality(currentEval, previousEval, uciMove === bestMoveAnalysis.move);
+                
+                if (game.game_over()) {
+                    handleGameOver();
+                    return;
+                }
+                
+                setTimeout(makeComputerMove, 500);
+            }
+
+            async function makeComputerMove() {
+                const fen = game.fen();
+                let computerMoveUCI = await fetchLichessMove(fen);
+
+                if (computerMoveUCI === null) {
+                    showSystemMessage("Out of book. Using engine.", 'fa-robot');
+                    await new Promise(resolve => setTimeout(resolve, 1200));
+                    const engineMove = await getEngineEvaluation(fen);
+                    computerMoveUCI = engineMove.move;
+                }
+                
+                if (computerMoveUCI) {
+                    game.move(computerMoveUCI, { sloppy: true });
+                    moveHistoryForUndo.push(fen);
+                    drawBoard();
+                }
+
+                if (game.game_over()) {
+                    handleGameOver();
+                }
+            }
+
+            // --- UI Update Functions ---
+            function showSystemMessage(message, icon = 'fa-info-circle') {
+                moveQualityElement.textContent = message;
+                evalScoreElement.textContent = '---';
+                evalImageElement.innerHTML = `<i class="fas ${icon} text-blue-500"></i>`;
+                feedbackCard.classList.add('fade-in');
+                feedbackCard.onanimationend = () => feedbackCard.classList.remove('fade-in');
+            }
+
+            function evaluateMoveQuality(currentEval, prevEval, isBest) {
+                const centipawnLoss = (prevEval - currentEval) * 100;
+                let quality, image, color;
+
+                if (isBest) {
+                    [quality, image, color] = ["Best move!", 'fa-star', 'text-yellow-500'];
+                } else if (centipawnLoss < 20) {
+                    [quality, image, color] = ["Excellent!", 'fa-check-double', 'text-green-500'];
+                } else if (centipawnLoss < 50) {
+                    [quality, image, color] = ["Good move.", 'fa-check', 'text-blue-500'];
+                } else if (centipawnLoss < 100) {
+                    [quality, image, color] = ["Inaccuracy.", 'fa-exclamation-triangle', 'text-orange-500'];
+                } else if (centipawnLoss < 200){
+                    [quality, image, color] = ["Mistake.", 'fa-times', 'text-red-500'];
+                } else {
+                    [quality, image, color] = ["Blunder!", 'fa-bomb', 'text-black'];
+                }
+
+                moveQualityElement.textContent = quality;
+                evalScoreElement.textContent = `Evaluation: ${currentEval.toFixed(2)} (Loss: ${Math.max(0, centipawnLoss).toFixed(0)}cp)`;
+                evalImageElement.innerHTML = `<i class="fas ${image} ${color}"></i>`;
+                feedbackCard.classList.add('fade-in');
+                feedbackCard.onanimationend = () => feedbackCard.classList.remove('fade-in');
+            }
+
+            function handleGameOver() {
+                trainingStarted = false;
+                let message = 'Game over.';
+                if (game.in_checkmate()) message = `Checkmate! ${game.turn() === 'w' ? 'Black' : 'White'} wins.`;
+                else if (game.in_draw()) message = 'Draw.';
+                
+                moveQualityElement.textContent = message;
+                startButton.innerHTML = '<i class="fas fa-redo mr-2"></i> New Game';
+                turnIndicatorElement.textContent = "Game Over";
+            }
+
+            function resetUI() {
+                moveQualityElement.textContent = "Training Started!";
+                evalScoreElement.textContent = "Make your move.";
+                bestMoveLabelElement.textContent = "Previous Best: N/A";
+                evalImageElement.innerHTML = '<i class="fas fa-chess-board text-gray-400"></i>';
+                undoButton.disabled = true;
+                startButton.innerHTML = '<i class="fas fa-redo mr-2"></i> Restart';
+            }
+
+            // --- Event Handlers ---
+            startButton.addEventListener('click', () => {
+                trainingStarted = true;
+                game = new Chess();
+                moveHistoryForUndo = [];
+                resetUI();
+                drawBoard();
+            });
+
+            undoButton.addEventListener('click', () => {
+                if (moveHistoryForUndo.length >= 2) {
+                    const userMoveFen = moveHistoryForUndo[moveHistoryForUndo.length - 2];
+                    game.load(userMoveFen);
+                    moveHistoryForUndo.splice(-2);
+                    drawBoard();
+                    moveQualityElement.textContent = "Move undone. Try again.";
+                    if (moveHistoryForUndo.length === 0) undoButton.disabled = true;
+                }
+            });
+            
+            function clearHighlights() {
+                document.querySelectorAll('.highlight-legal, .highlight-selected').forEach(el => el.classList.remove('highlight-legal', 'highlight-selected'));
+            }
+
+            function handleSquareClick(e) {
+                if (!trainingStarted || game.turn() !== 'w') return;
+                const squareEl = e.currentTarget;
+                const squareName = squareEl.dataset.square;
+
+                if (selectedSquare) {
+                    const move = { from: selectedSquare, to: squareName, promotion: 'q' };
+                    const tempMove = game.move(move);
+                    if (tempMove) {
+                       game.undo();
+                       handleUserMove(move);
+                    }
+                    clearHighlights();
+                    selectedSquare = null;
+                } else {
+                    const piece = game.get(squareName);
+                    if (piece && piece.color === 'w') {
+                        selectedSquare = squareName;
+                        squareEl.classList.add('highlight-selected');
+                        game.moves({ square: squareName, verbose: true }).forEach(m => {
+                            document.querySelector(`[data-square="${m.to}"]`).classList.add('highlight-legal');
+                        });
+                    }
+                }
+            }
+
+            function addInteractionHandlers() {
+                document.querySelectorAll('.piece').forEach(pieceEl => {
+                    pieceEl.addEventListener('dragstart', (e) => {
+                        if (!pieceEl.draggable) return;
+                        selectedSquare = pieceEl.parentElement.dataset.square;
+                        e.dataTransfer.setData('text/plain', selectedSquare);
+                        e.dataTransfer.setDragImage(pieceEl, pieceEl.offsetWidth / 2, pieceEl.offsetHeight / 2);
+                        setTimeout(() => { pieceEl.classList.add('dragging'); }, 0);
+                    });
+                    pieceEl.addEventListener('dragend', (e) => {
+                        pieceEl.classList.remove('dragging');
+                    });
+                });
+
+                document.querySelectorAll('.square').forEach(squareEl => {
+                    squareEl.addEventListener('click', handleSquareClick);
+                    squareEl.addEventListener('dragover', (e) => e.preventDefault());
+                    squareEl.addEventListener('drop', (e) => {
+                        e.preventDefault();
+                        const fromSquare = e.dataTransfer.getData('text/plain') || selectedSquare;
+                        const toSquare = squareEl.dataset.square;
+                        if (fromSquare && toSquare && fromSquare !== toSquare) {
+                            handleUserMove({ from: fromSquare, to: toSquare, promotion: 'q' });
+                        }
+                        clearHighlights();
+                        selectedSquare = null;
+                    });
+                });
+            }
+
+            // --- Initial Setup ---
+            drawBoard();
+        });
+    </script>
+</body>
+</html>
