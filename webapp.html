@@ -55,6 +55,9 @@
             background-color: rgba(96, 165, 250, 0.3) !important;
             box-shadow: inset 0 0 0 3px rgba(96, 165, 250, 0.7);
         }
+        .highlight-computer-move {
+            box-shadow: inset 0 0 0 5px rgba(59, 130, 246, 0.7);
+        }
         .highlight-check {
              background: radial-gradient(circle, rgba(239, 68, 68, 0.4) 20%, transparent 25%);
         }
@@ -74,6 +77,8 @@
         <div class="lg:col-span-2 flex flex-col items-center justify-center">
             <div id="board" class="board"></div>
             <div id="turn-indicator" class="mt-4 text-lg font-semibold text-gray-600">Press Start Training</div>
+            <!-- New element for computer move description -->
+            <div id="computer-move-text" class="mt-2 text-md text-gray-500 h-6"></div>
         </div>
 
         <!-- Control Panel Column -->
@@ -115,17 +120,22 @@
             const engineStatusElement = document.getElementById('engine-status');
             const evalImageElement = document.getElementById('eval-image');
             const feedbackCard = document.getElementById('feedback-card');
+            const computerMoveTextElement = document.getElementById('computer-move-text');
 
             // --- Game State ---
             let game = new Chess();
             let trainingStarted = false;
             let selectedSquare = null;
             let moveHistoryForUndo = [];
+            let lastComputerMove = null; // To store { from, to } for highlighting
 
             // --- Piece Representation ---
             const pieceUnicode = {
                 w: { p: '♙', r: '♖', n: '♘', b: '♗', q: '♕', k: '♔' },
                 b: { p: '♟', r: '♜', n: '♞', b: '♝', q: '♛', k: '♚' }
+            };
+            const pieceNames = {
+                p: 'Pawn', r: 'Rook', n: 'Knight', b: 'Bishop', q: 'Queen', k: 'King'
             };
 
             // --- Board Drawing ---
@@ -150,6 +160,10 @@
                             squareEl.appendChild(pieceEl);
                         }
                         
+                        if (lastComputerMove && (squareName === lastComputerMove.from || squareName === lastComputerMove.to)) {
+                            squareEl.classList.add('highlight-computer-move');
+                        }
+
                         if (inCheck && piece && piece.type === 'k' && piece.color === game.turn()) {
                             squareEl.classList.add('highlight-check');
                         }
@@ -176,17 +190,11 @@
             async function getEngineEvaluation(fen, depth = 12) {
                 engineStatusElement.textContent = 'Engine: Analyzing...';
                 
-                // *** BUG FIX: Sanitize the FEN for the buggy chess-api.com parser ***
-                // The API fails if the en passant field is anything other than "-".
-                // We will replace it to ensure compatibility.
                 let fenParts = fen.split(" ");
                 if (fenParts[3] !== "-") {
-                    console.log(`Original FEN has en passant square "${fenParts[3]}". Sanitizing for API.`);
                     fenParts[3] = "-";
                 }
                 const sanitizedFen = fenParts.join(" ");
-                
-                console.log("Sending FEN to chess-api.com:", sanitizedFen);
 
                 try {
                     const response = await fetch("https://chess-api.com/v1", {
@@ -196,7 +204,6 @@
                     });
                     
                     const data = await response.json();
-                    console.log("Received response from chess-api.com:", data);
                     
                     if (data && data.move) {
                         engineStatusElement.textContent = 'Engine: Idle';
@@ -253,6 +260,9 @@
             async function handleUserMove(move) {
                 if (!trainingStarted || game.turn() !== 'w') return;
                 
+                lastComputerMove = null;
+                computerMoveTextElement.textContent = '';
+
                 const fenBeforeMove = game.fen();
                 const bestMoveAnalysis = await getEngineEvaluation(fenBeforeMove);
                 const previousEval = bestMoveAnalysis.score;
@@ -299,7 +309,11 @@
                 }
                 
                 if (computerMoveUCI) {
-                    game.move(computerMoveUCI, { sloppy: true });
+                    const moveResult = game.move(computerMoveUCI, { sloppy: true });
+                    if (moveResult) {
+                        lastComputerMove = { from: moveResult.from, to: moveResult.to };
+                        updateComputerMoveText(moveResult);
+                    }
                     moveHistoryForUndo.push(fen);
                     drawBoard();
                 }
@@ -310,6 +324,44 @@
             }
 
             // --- UI Update Functions ---
+            function showTemporaryMessage(message, duration = 3000) {
+                computerMoveTextElement.textContent = message;
+                setTimeout(() => {
+                    if (computerMoveTextElement.textContent === message) {
+                        computerMoveTextElement.textContent = '';
+                    }
+                }, duration);
+            }
+
+            function pulseStartButton() {
+                startButton.classList.add('animate-pulse', 'bg-green-500', 'hover:bg-green-600');
+                startButton.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+                setTimeout(() => {
+                    startButton.classList.remove('animate-pulse', 'bg-green-500', 'hover:bg-green-600');
+                    startButton.classList.add('bg-blue-600', 'hover:bg-blue-700');
+                }, 2500);
+            }
+
+            function updateComputerMoveText(move) {
+                let text = "The Trainer ";
+                const movingPiece = pieceNames[move.piece];
+
+                if (move.flags.includes('c')) {
+                    const capturedPiece = pieceNames[move.captured];
+                    text += `took your ${capturedPiece} with its ${movingPiece}`;
+                } else {
+                    text += `moved its ${movingPiece}`;
+                }
+
+                if (move.san.includes('+')) {
+                    text += " and put you in check!";
+                } else if (move.san.includes('#')) {
+                    text = "The Trainer delivered checkmate!";
+                }
+
+                computerMoveTextElement.textContent = text;
+            }
+
             function showSystemMessage(message, icon = 'fa-info-circle') {
                 moveQualityElement.textContent = message;
                 evalScoreElement.textContent = '---';
@@ -361,6 +413,8 @@
                 evalImageElement.innerHTML = '<i class="fas fa-chess-board text-gray-400"></i>';
                 undoButton.disabled = true;
                 startButton.innerHTML = '<i class="fas fa-redo mr-2"></i> Restart';
+                lastComputerMove = null;
+                computerMoveTextElement.textContent = '';
             }
 
             // --- Event Handlers ---
@@ -377,6 +431,8 @@
                     const userMoveFen = moveHistoryForUndo[moveHistoryForUndo.length - 2];
                     game.load(userMoveFen);
                     moveHistoryForUndo.splice(-2);
+                    lastComputerMove = null;
+                    computerMoveTextElement.textContent = '';
                     drawBoard();
                     moveQualityElement.textContent = "Move undone. Try again.";
                     if (moveHistoryForUndo.length === 0) undoButton.disabled = true;
@@ -388,7 +444,12 @@
             }
 
             function handleSquareClick(e) {
-                if (!trainingStarted || game.turn() !== 'w') return;
+                if (!trainingStarted) {
+                    showTemporaryMessage("Click 'Start' to begin training!");
+                    pulseStartButton();
+                    return;
+                }
+                if (game.turn() !== 'w') return;
                 const squareEl = e.currentTarget;
                 const squareName = squareEl.dataset.square;
 
@@ -416,6 +477,10 @@
             function addInteractionHandlers() {
                 document.querySelectorAll('.piece').forEach(pieceEl => {
                     pieceEl.addEventListener('dragstart', (e) => {
+                        if (!trainingStarted) {
+                            e.preventDefault();
+                            return;
+                        }
                         if (!pieceEl.draggable) return;
                         selectedSquare = pieceEl.parentElement.dataset.square;
                         e.dataTransfer.setData('text/plain', selectedSquare);
@@ -432,6 +497,11 @@
                     squareEl.addEventListener('dragover', (e) => e.preventDefault());
                     squareEl.addEventListener('drop', (e) => {
                         e.preventDefault();
+                         if (!trainingStarted) {
+                            showTemporaryMessage("Click 'Start' to begin training!");
+                            pulseStartButton();
+                            return;
+                        }
                         const fromSquare = e.dataTransfer.getData('text/plain') || selectedSquare;
                         const toSquare = squareEl.dataset.square;
                         if (fromSquare && toSquare && fromSquare !== toSquare) {
