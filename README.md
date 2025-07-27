@@ -1,22 +1,41 @@
-# Purpose:
+# Chess Trainer
 
-Chess Trainer allows you to improve your chess openings by playing against the entire Lichess database of moves. Get live Stockfish feedback on every move you make to evaluate its quality, and learn how to improve your game in real-time.
+A web-based chess training tool that provides instant feedback on move quality by leveraging the Lichess database and a powerful chess engine API.
 
-# Requirements:
+## Live Demo
 
-- Python 3.x
-- Tkinter
-- Chess library
-- Stockfish engine
-- Lichess API
+You can play the Chess Trainer live in your browser at the following URL:
 
-# Setup:
+**[https://bscheidelman.github.io/chess-trainer/](https://bscheidelman.github.io/chess-trainer/)**
 
-1. Download and set up the Stockfish engine.
-2. Ensure required Python libraries are installed.
-3. Launch the app and start practicing your chess openings.
+## Features
 
-# Usage:
+-   **Interactive Chessboard:** A clean, modern, and responsive chessboard interface.
+-   **Play Against Lichess Database:** The computer opponent plays moves based on the massive Lichess database of human games, providing a realistic training experience.
+-   **Instant Move Analysis:** Every move you make is instantly evaluated for its quality (Best, Excellent, Good, Inaccuracy, Mistake, Blunder).
+-   **Engine Fallback:** If a position is not in the Lichess database, the app seamlessly switches to a strong engine to continue the game.
+-   **Visual Feedback:** The computer's last move is clearly highlighted on the board, with a descriptive text of its action.
+-   **Core Controls:** Easily start a new game or undo your last move to try a different line.
 
-1. Set up a board and start training.
-2. Make moves and receive real-time evaluation and feedback.
+## Technologies Used
+
+-   **HTML, CSS, JavaScript:** The core of the application.
+-   **Tailwind CSS:** For modern and responsive styling.
+-   **Chess.js:** For client-side chess logic, move validation, and FEN generation.
+-   **Chess-API.com:** Provides remote Stockfish engine analysis for move evaluation.
+-   **Lichess Opening Explorer API:** Used to source common human-played moves for the computer opponent.
+-   **Font Awesome:** For icons.
+
+## Local Development
+
+For those who wish to run the project locally:
+
+1.  Clone the repository:
+    ```bash
+    git clone [https://github.com/bscheidelman/chess-trainer.git](https://github.com/bscheidelman/chess-trainer.git)
+    ```
+2.  Navigate to the project directory:
+    ```bash
+    cd chess-trainer
+    ```
+3.  Open the `index.html` file in your web browser.
