@@ -43,6 +43,8 @@
             line-height: 1;
             text-shadow: 0 2px 4px rgba(0,0,0,0.1);
             transition: opacity 0.1s ease-in-out;
+            position: relative;
+            z-index: 10;
         }
         .piece.dragging {
             opacity: 0;
@@ -68,6 +70,36 @@
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
         }
+
+        /* --- Best Move Highlight Styles --- */
+        .highlight-dot {
+            content: '';
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            z-index: 5;
+        }
+        .pulse-green-dot {
+            background-color: rgba(22, 163, 74, 0.5);
+            animation: pulse-green-animation 2s infinite ease-in-out;
+        }
+        .piece.pulse-piece {
+             animation: pulse-green-piece-animation 2s infinite ease-in-out;
+        }
+        @keyframes pulse-green-animation {
+            0% { transform: scale(1); opacity: 0.8; }
+            50% { transform: scale(0.8); opacity: 0.5; }
+            100% { transform: scale(1); opacity: 0.8; }
+        }
+        @keyframes pulse-green-piece-animation {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        .ghost-piece {
+            opacity: 0.6;
+        }
     </style>
 </head>
 <body class="text-gray-800 flex items-center justify-center min-h-screen p-4">
@@ -77,8 +109,7 @@
         <div class="lg:col-span-2 flex flex-col items-center justify-center">
             <div id="board" class="board"></div>
             <div id="turn-indicator" class="mt-4 text-lg font-semibold text-gray-600">Press Start Training</div>
-            <!-- New element for computer move description -->
-            <div id="computer-move-text" class="mt-2 text-md text-gray-500 h-6"></div>
+            <div id="computer-move-text" class="mt-2 text-md text-gray-500 h-12 text-center"></div>
         </div>
 
         <!-- Control Panel Column -->
@@ -127,7 +158,17 @@
             let trainingStarted = false;
             let selectedSquare = null;
             let moveHistoryForUndo = [];
-            let lastComputerMove = null; // To store { from, to } for highlighting
+            let lastComputerMove = null;
+            let bestMoveHighlight = null;
+            // --- Tutorial State Flags ---
+            let isTutorialMessageActive = false;
+            let hasShownLichessIntro = false;
+            let hasShownBestMoveIntro = false;
+            let hasShownStockfishIntro = false;
+            let hasShownBestMoveHighlightTip = false;
+            let hasShownBestMoveCongrats = false;
+            let hasShownRareMoveIntro = false;
+            let hasShownEvalIntro = false;
 
             // --- Piece Representation ---
             const pieceUnicode = {
@@ -162,6 +203,33 @@
                         
                         if (lastComputerMove && (squareName === lastComputerMove.from || squareName === lastComputerMove.to)) {
                             squareEl.classList.add('highlight-computer-move');
+                        }
+
+                        if (bestMoveHighlight) {
+                            if (squareName === bestMoveHighlight.to) {
+                                const destDot = document.createElement('div');
+                                destDot.classList.add('highlight-dot', 'pulse-green-dot');
+                                squareEl.appendChild(destDot);
+                            }
+                            if (squareName === bestMoveHighlight.from) {
+                                if (bestMoveHighlight.type === 'pieceAndDot') {
+                                    const originPiece = squareEl.querySelector('.piece');
+                                    if (originPiece) {
+                                        originPiece.classList.add('pulse-piece');
+                                    } else {
+                                         const ghostPiece = document.createElement('div');
+                                        ghostPiece.classList.add('piece', 'ghost-piece', 'pulse-piece');
+                                        if (bestMoveHighlight.piece) {
+                                            ghostPiece.textContent = pieceUnicode[bestMoveHighlight.piece.color][bestMoveHighlight.piece.type];
+                                        }
+                                        squareEl.appendChild(ghostPiece);
+                                    }
+                                } else {
+                                    const originDot = document.createElement('div');
+                                    originDot.classList.add('highlight-dot', 'pulse-green-dot');
+                                    squareEl.appendChild(originDot);
+                                }
+                            }
                         }
 
                         if (inCheck && piece && piece.type === 'k' && piece.color === game.turn()) {
@@ -239,14 +307,15 @@
                     if (!moves || moves.length === 0) return null;
 
                     const totalPlays = moves.reduce((sum, move) => sum + move.white + move.black + move.draws, 0);
-                    if (totalPlays === 0) return moves[0].uci;
+                    if (totalPlays === 0) return { uci: moves[0].uci, san: moves[0].san, percentage: 100 };
                     const randomPick = Math.random() * totalPlays;
                     
                     let cumulative = 0;
                     for (const move of moves) {
                         cumulative += move.white + move.black + move.draws;
                         if (randomPick <= cumulative) {
-                            return move.uci;
+                            const percentage = ((move.white + move.black + move.draws) / totalPlays) * 100;
+                            return { uci: move.uci, san: move.san, percentage: percentage.toFixed(1) };
                         }
                     }
                     return null;
@@ -261,6 +330,7 @@
                 if (!trainingStarted || game.turn() !== 'w') return;
                 
                 lastComputerMove = null;
+                bestMoveHighlight = null;
                 computerMoveTextElement.textContent = '';
 
                 const fenBeforeMove = game.fen();
@@ -268,6 +338,8 @@
                 const previousEval = bestMoveAnalysis.score;
                 
                 const tempGame = new Chess(fenBeforeMove);
+                const bestMoveFrom = bestMoveAnalysis.move.substring(0, 2);
+                const pieceForHighlight = tempGame.get(bestMoveFrom);
                 const bestMoveSAN = bestMoveAnalysis.move ? tempGame.move(bestMoveAnalysis.move, {sloppy:true})?.san : 'N/A';
 
                 bestMoveLabelElement.textContent = `Previous Best: ${bestMoveSAN}`;
@@ -278,16 +350,45 @@
                     return;
                 }
                 
+                const fenAfterMove = game.fen();
+                const currentEvalAnalysis = await getEngineEvaluation(fenAfterMove);
+                const currentEval = currentEvalAnalysis.score;
+                const centipawnLoss = (previousEval - currentEval) * 100;
+                
+                const uciMove = moveResult.from + moveResult.to;
+                const isBest = uciMove === bestMoveAnalysis.move;
+
+                // --- Tutorial Message Logic ---
+                let tutorialMessage = null;
+                if (isBest && !hasShownBestMoveCongrats) {
+                    tutorialMessage = "That was the best move!";
+                    hasShownBestMoveCongrats = true;
+                } else if (!isBest && !hasShownBestMoveIntro) {
+                    tutorialMessage = "Curious what the best move was? It's shown under 'Previous Best'!";
+                    hasShownBestMoveIntro = true;
+                } else if (centipawnLoss >= 100 && !hasShownBestMoveHighlightTip) {
+                     tutorialMessage = "The green highlight shows the best move. Feel free to undo and try it!";
+                     hasShownBestMoveHighlightTip = true;
+                } else if (!hasShownEvalIntro) {
+                    tutorialMessage = `The evaluation is ${currentEval.toFixed(2)}. A positive score favors you, negative favors the trainer.`;
+                    hasShownEvalIntro = true;
+                }
+
+                if (tutorialMessage) {
+                    showTemporaryMessage(tutorialMessage, 6000, true);
+                }
+
+                if (!isBest && centipawnLoss >= 100) {
+                    const bestMoveTo = bestMoveAnalysis.move.substring(2, 4);
+                    const highlightType = moveResult.from === bestMoveFrom ? 'dots' : 'pieceAndDot';
+                    bestMoveHighlight = { from: bestMoveFrom, to: bestMoveTo, piece: pieceForHighlight, type: highlightType };
+                }
+
                 moveHistoryForUndo.push(fenBeforeMove);
                 undoButton.disabled = false;
                 drawBoard();
                 
-                const fenAfterMove = game.fen();
-                const currentEvalAnalysis = await getEngineEvaluation(fenAfterMove);
-                const currentEval = currentEvalAnalysis.score;
-                
-                const uciMove = moveResult.from + moveResult.to;
-                evaluateMoveQuality(currentEval, previousEval, uciMove === bestMoveAnalysis.move);
+                evaluateMoveQuality(currentEval, previousEval, isBest);
                 
                 if (game.game_over()) {
                     handleGameOver();
@@ -299,13 +400,25 @@
 
             async function makeComputerMove() {
                 const fen = game.fen();
-                let computerMoveUCI = await fetchLichessMove(fen);
+                let lichessData = await fetchLichessMove(fen);
+                let computerMoveUCI;
 
-                if (computerMoveUCI === null) {
-                    showSystemMessage("Out of book. Using engine.", 'fa-robot');
-                    await new Promise(resolve => setTimeout(resolve, 1200));
+                if (lichessData === null) {
+                    if (!isTutorialMessageActive && !hasShownStockfishIntro) {
+                        showTemporaryMessage("You're off the beaten path! The trainer is now using its full engine strength. Even Magnus can't beat it, so good luck!", 6000, true);
+                        hasShownStockfishIntro = true;
+                    }
                     const engineMove = await getEngineEvaluation(fen);
                     computerMoveUCI = engineMove.move;
+                } else {
+                    computerMoveUCI = lichessData.uci;
+                     if (!isTutorialMessageActive && !hasShownLichessIntro) {
+                        showTemporaryMessage(`You're playing against moves made by humans on Lichess! They played ${lichessData.san} ${lichessData.percentage}% of the time.`, 6000, true);
+                        hasShownLichessIntro = true;
+                    } else if (!isTutorialMessageActive && lichessData.percentage < 5 && !hasShownRareMoveIntro) {
+                        showTemporaryMessage(`Wow, a rare choice! Humans only play ${lichessData.san} in this position ${lichessData.percentage}% of the time.`, 6000, true);
+                        hasShownRareMoveIntro = true;
+                    }
                 }
                 
                 if (computerMoveUCI) {
@@ -324,11 +437,17 @@
             }
 
             // --- UI Update Functions ---
-            function showTemporaryMessage(message, duration = 3000) {
-                computerMoveTextElement.textContent = message;
+            function showTemporaryMessage(message, duration = 3000, isPriority = false) {
+                if (isPriority) {
+                    isTutorialMessageActive = true;
+                }
+                computerMoveTextElement.innerHTML = `<span class="fade-in">${message}</span>`;
                 setTimeout(() => {
-                    if (computerMoveTextElement.textContent === message) {
-                        computerMoveTextElement.textContent = '';
+                    if (computerMoveTextElement.innerHTML.includes(message)) {
+                        computerMoveTextElement.innerHTML = '';
+                    }
+                    if(isPriority) {
+                        isTutorialMessageActive = false;
                     }
                 }, duration);
             }
@@ -343,6 +462,8 @@
             }
 
             function updateComputerMoveText(move) {
+                if (isTutorialMessageActive) return; // Don't overwrite a tutorial message
+
                 let text = "The Trainer ";
                 const movingPiece = pieceNames[move.piece];
 
@@ -358,7 +479,7 @@
                 } else if (move.san.includes('#')) {
                     text = "The Trainer delivered checkmate!";
                 }
-
+                
                 computerMoveTextElement.textContent = text;
             }
 
@@ -414,7 +535,16 @@
                 undoButton.disabled = true;
                 startButton.innerHTML = '<i class="fas fa-redo mr-2"></i> Restart';
                 lastComputerMove = null;
+                bestMoveHighlight = null;
                 computerMoveTextElement.textContent = '';
+                isTutorialMessageActive = false;
+                hasShownLichessIntro = false;
+                hasShownBestMoveIntro = false;
+                hasShownStockfishIntro = false;
+                hasShownBestMoveHighlightTip = false;
+                hasShownBestMoveCongrats = false;
+                hasShownRareMoveIntro = false;
+                hasShownEvalIntro = false;
             }
 
             // --- Event Handlers ---
@@ -432,6 +562,7 @@
                     game.load(userMoveFen);
                     moveHistoryForUndo.splice(-2);
                     lastComputerMove = null;
+                    bestMoveHighlight = null;
                     computerMoveTextElement.textContent = '';
                     drawBoard();
                     moveQualityElement.textContent = "Move undone. Try again.";
@@ -445,7 +576,7 @@
 
             function handleSquareClick(e) {
                 if (!trainingStarted) {
-                    showTemporaryMessage("Click 'Start' to begin training!");
+                    showTemporaryMessage("Click 'Start' to begin training!", 3000, true);
                     pulseStartButton();
                     return;
                 }
@@ -498,7 +629,7 @@
                     squareEl.addEventListener('drop', (e) => {
                         e.preventDefault();
                          if (!trainingStarted) {
-                            showTemporaryMessage("Click 'Start' to begin training!");
+                            showTemporaryMessage("Click 'Start' to begin training!", 3000, true);
                             pulseStartButton();
                             return;
                         }
